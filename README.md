@@ -1,6 +1,6 @@
-# ✨ Reinforcement Learning Algorithms in Python
+## ✨ Reinforcement Learning Algorithms in Python
 
-This repository contains implementations of several Reinforcement Learning (RL) algorithms for **both discrete and continuous** action space environments. The project is built with flexibility, clarity, and experimentation in mind — suitable for students, researchers, and anyone exploring RL concepts.
+This repository contains implementations of several Reinforcement Learning (RL) algorithms for **both discrete and continuous** action space environments based on my understanding after reading the papers. The project is built with flexibility, clarity, and experimentation in mind — suitable for students, researchers, and anyone exploring RL concepts.
 
 ---
 
