@@ -13,9 +13,7 @@ This repository contains implementations of several Reinforcement Learning (RL) 
 
 ---
 
-## Algorithms Implemented
-
-### 🔹 Discrete Action Space
+### Algorithms Implemented
 - Q-Learning  
 - Dqn
 - Dueling Double Dqn
