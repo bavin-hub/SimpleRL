@@ -4,7 +4,7 @@ This repository contains implementations of several Reinforcement Learning (RL) 
 
 ---
 
-![demo gif](assets/demo.gif)
+![test gif](results/test.gif)
 
 
 ## Features
