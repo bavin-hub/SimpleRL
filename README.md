@@ -4,6 +4,9 @@ This repository contains implementations of several Reinforcement Learning (RL) 
 
 ---
 
+![demo gif](assets/demo.gif)
+
+
 ## Features
 
 - Supports **value-based** and **policy-based** RL methods  
