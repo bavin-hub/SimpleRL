@@ -9,6 +9,12 @@ from torch.distributions.normal import Normal
 import itertools
 import torch.nn.functional as F
 
+import argparse
+
+parser = argparse.ArgumentParser()
+parser.add_argument('--run_mode', type=str, default='train')
+parser.add_argument('--eval_episodes', type=int, default=1)
+
 
 
 
@@ -130,76 +136,6 @@ class Network(nn.Module):
         return action.clip(-1.0, 1.0), self.critic(x), probs.log_prob(action).sum(-1), probs.entropy().sum(-1)
 
 
-# class Actor(nn.Module):
-#     def __init__(self, n_s, n_a, hidden):
-#         super(Actor, self).__init__()
-#         self.fc1 = nn.Linear(n_s, hidden)
-#         self.fc2 = nn.Linear(hidden, hidden)
-#         self.mu = nn.Linear(hidden, n_a)
-#         self.mu.weight.data.mul_(0.1)
-#         self.mu.bias.data.mul_(0.0)
-#         self.log_sigma = nn.Linear(hidden, n_a)
-    
-#     def forward(self, x):
-#         x = t.tanh(self.fc1(x))
-#         x = t.tanh(self.fc2(x))
-#         mu = self.mu(x)
-#         log_sigma = self.log_sigma(x)
-        
-#         sigma = t.exp(log_sigma)
-#         return mu, sigma
-    
-#     def get_dist(self, x):
-#         mu, sigma = self.forward(x)
-#         dist = Normal(mu, sigma)
-#         return dist
-    
-# class Critic(nn.Module):
-#     def __init__(self, n_s, hidden):
-#         super(Critic, self).__init__()
-#         self.fc1 = nn.Linear(n_s, hidden)
-#         self.fc2 = nn.Linear(hidden, hidden)
-#         self.fc3 = nn.Linear(hidden, 1)
-#         self.fc3.weight.data.mul_(0.1)
-#         self.fc3.bias.data.mul_(0.0)
-    
-#     def forward(self, x):
-#         x = t.tanh(self.fc1(x))
-#         x = t.tanh(self.fc2(x))
-#         return self.fc3(x)
-    
-#     def get_value(self, x):
-#         return self.forward(x)
-    
-
-# class Network():
-#     def __init__(self, env, hidden):
-#         self.input_dims = np.array(env.observation_space.shape).prod()
-#         self.output_dims = np.array(env.action_space.shape).prod()
-#         self.hidden = hidden
-        
-#         self.actor = Actor(self.input_dims, self.output_dims, hidden).to('cuda')
-#         self.critic = Critic(self.input_dims, hidden).to('cuda')
-
-#         lr_actor = 3e-4 
-#         lr_critic = lr_actor
-#         decay = 0.001
-#         self.actor_optim = optim.Adam(self.actor.parameters(), lr=lr_actor)
-#         self.critic_optim = optim.Adam(self.critic.parameters(), lr=lr_critic, weight_decay=decay)
-
-#     def get_action_value(self, x, action=None):
-#         dist = self.actor.get_dist(x)
-#         if action is None:
-#             action = dist.sample()
-#             # print('while sampling : ', action.shape)
-#         log_prob = dist.log_prob(action).sum(1)
-#         entropy = dist.entropy().sum(1)
-#         value = self.critic.get_value(x)
-#         return action, value, log_prob, entropy
-
-    
-
-
 class Agent():
     def __init__(self, env, batch_size, memory_size, hidden, epochs, lr, gamma, gae_l,\
                  actor_clip_coeff, value_clip_coeff, entropy_clip_coeff, device):
@@ -224,6 +160,16 @@ class Agent():
 
         self.critic_loss_func = t.nn.MSELoss()
 
+
+        # save and load models
+        cwd = os.getcwd()
+        self.saved_models_path = os.path.join(cwd, 'saved_model_wts')
+        if os.path.isdir(self.saved_models_path):
+            pass
+        else:
+            print('creating saved models dir to store weights')
+            os.makedirs(self.saved_models_path)
+
     def store(self, state, action, reward, value, logprob, done, idx):
         self.memory.store_memory(state, action, reward,\
                                  value, logprob, done, idx)    
@@ -241,20 +187,6 @@ class Agent():
         
         rewards = reward_normalization(rewards)
 
-
-        # advantages = t.zeros_like(rewards, device=self.device)
-        # last_advantage = 0
-        # last_value = 0
-
-        # for k in reversed(range(len(rewards))):
-        #     mask = 1.0 - dones[k]
-        #     next_value = values[k + 1] if k < len(rewards) - 1 else 0
-        #     delta = rewards[k] + self.gamma * next_value * mask - values[k]
-        #     last_advantage = delta + self.gamma * self.gae_l * mask * last_advantage
-        #     advantages[k] = last_advantage
-
-        # returns = advantages + values
-
         # not mine
         returns = t.zeros_like(rewards)
         advantages = t.zeros_like(rewards)
@@ -270,18 +202,6 @@ class Agent():
             previous_value = values[k]
             advantages[k] = running_adv
 
-        # # mine
-        # advantages = t.zeros_like(rewards)
-        # next_gae_value = 0 
-        # for k in reversed(range(len(rewards))):
-        #     if k == len(rewards) - 1:
-        #         next_state_value = 0
-        #     else:
-        #         next_state_value = values[k+1]
-            
-        #     delta = rewards[k] + self.gamma * next_state_value * (1-dones[k]) - values[k]
-        #     advantage = next_gae_value = delta + self.gamma * self.gae_l * next_gae_value
-        #     advantages[k] = advantage 
 
         if normalize:
             advantages = (advantages - advantages.mean()) / (advantages.std() + 1e-3)
@@ -319,20 +239,8 @@ class Agent():
                 # entopy loss
                 entropy_loss = self.entropy_clip_coeff * entropy.squeeze(-1).mean()
 
-                # actor_loss = surr_loss - entropy_loss
-                # self.network.actor_optim.zero_grad()
-                # surr_loss.backward()
-                # self.network.actor_optim.step()
-
                 # critic loss
                 critic_loss = F.smooth_l1_loss(new_values, mb_returns)
-                # critic_loss = self.value_clip_coeff * ((mb_returns - new_values)**2).mean()
-                # critic_loss = self.critic_loss_func(new_values.squeeze(-1),mb_returns.squeeze(-1))
-
-                # self.network.critic_optim.zero_grad()
-                # critic_loss.backward()
-                # self.network.critic_optim.step()
-                
 
                 loss = actor_loss + critic_loss - entropy_loss
 
@@ -344,17 +252,29 @@ class Agent():
         self.memory.clear_memory()
         print('Learning completed')
 
-
-    # def save_model(self, env_name, avg_score):
-    #     path = f'/home/bavin/sem1/intro_robot_learning/my_rl/models/{env_name}-wts.pt'
-    #     data = {'model_state_dict': self.network.actor.state_dict()}
-    #     t.save(data, path)
-    #     print('saved model successfully')
-
-    def save_model(self):
-        path = f'/home/bavin/sem1/intro_robot_learning/my_rl/models/mine_wts.pt'
-        t.save(self.network.state_dict(), path)
+    def save_model(self, env_name):
+        model_path = f'{self.saved_models_path}/{env_name}_wts.pt'
+        t.save(self.network.actor.state_dict(), model_path)
         print('saved model successfully')
+
+
+    def load_model(self, env_name):
+        model_path = f'{self.saved_models_path}/{env_name}_wts.pt'
+        if os.path.isfile(model_path):
+            self.network.actor.load_state_dict(t.load(model_path, weights_only=True))
+            print('model loaded successfully')
+        else:
+            print('\n\nWeights does not exists!! Train the model first')
+
+    def deteministic_action(self, state):
+        self.network.eval()
+        state = t.tensor([state], dtype=t.float).to('cuda')
+        action = self.network.actor.forward(state)
+        return action.cpu().detach().numpy()[0] 
+    
+    def save_video(self, episode_frames, env_name, ep_num=1):
+        from utils import save_gif
+        save_gif(episode_frames, env_name, ep_num)
 
 
 
@@ -429,11 +349,11 @@ def evaluate(eval_env, agent, eval_num, deterministic=True):
 
 
 
-def run():
-    device = 'cuda' if t.cuda.is_available() else 'cpu'
-    print('\n\n\nAvailable device : ', device)
+def run(args):
+
     env_name = 'Hopper-v2'
-    env = gym.make(env_name)
+    env = gym.make(env_name, render_mode='rgb_array')
+
     eval_env = gym.make(env_name)
     eval_num = 4
 
@@ -452,170 +372,68 @@ def run():
     value_clip_coeff = 0.5
     entropy_clip_coeff = 0.001
 
+    
+
     agent = Agent(env, batch_size, memory_size, hidden,\
                   epochs, lr, gamma, gae,\
-                   actor_clip_coeff, value_clip_coeff, entropy_clip_coeff, device)
+                   actor_clip_coeff, value_clip_coeff, entropy_clip_coeff, 'cuda')
     
     num_episodes = 10000000
     rollout_len = episode_len = memory_size
-    total_steps = 100000
+    total_steps = 10
 
     score_history = []
     step = 0
 
-    state = nomalize(env.reset())
+    if args.run_mode == 'train':
+        state = nomalize(env.reset())
+        for step in range(total_steps):
+            with t.no_grad():
+                action, value, logprob = agent.sample_action(state, deterministic=False)
+            next_state, reward, done, _ = env.step(action.to('cpu').numpy().squeeze())
+            step += 1
+            agent.store(t.tensor(state, device='cuda'), action, reward, value, logprob, done, step)
+            
+            state = nomalize(next_state)
+            if done:
+                state = nomalize(env.reset())
 
-    for step in range(total_steps):
-        with t.no_grad():
-            action, value, logprob = agent.sample_action(state, deterministic=False)
-        next_state, reward, done, _ = env.step(action.to('cpu').numpy().squeeze())
-        step += 1
-        agent.store(t.tensor(state, device=device), action, reward, value, logprob, done, step)
-        
-        state = nomalize(next_state)
-        if done:
+
+            if step % memory_size == 0:
+                print('\n\nLearning Phase')
+                agent.learn()
+                print('Evaluation Phase')
+                mean_eval_returns = evaluate(eval_env, agent, eval_num, deterministic=False)
+                print(f'step : {step} eval_avg_rets : {mean_eval_returns}')
+
+        agent.save_model(env_name)
+
+    elif args.run_mode == 'eval':
+        eval_episodes = args.eval_episodes
+        agent.load_model(env_name)
+
+        for eval_ep in range(eval_episodes):
             state = env.reset()
+            done = False
+            score = 0
+            episode_frames = []
+            while not done:
+                frame = env.render()
+                frame = np.array(frame).squeeze()
+                episode_frames.append(frame)
 
-        if step % memory_size == 0:
-            print('\n\nLearning Phase')
-            agent.learn()
-            print('Evaluation Phase')
-            mean_eval_returns = evaluate(eval_env, agent, eval_num, deterministic=False)
-            print(f'step : {step} eval_avg_rets : {mean_eval_returns}')
+                action = agent.deteministic_action(state)
+                next_state, reward, done, info = env.step(action)
+                score += reward
+                state = next_state
 
-    agent.save_model()
+            print(f'eval ep: {eval_ep}, score: {score}')
 
-    # for ep in range(num_episodes):
-    #     episode_score = 0
-    #     while True:
-    #         action, value, logprob = agent.sample_action(state, deterministic=False)
-    #         next_state, reward, done, _ = env.step(action.to('cpu').numpy().squeeze())
-    #         step += 1
-    #         episode_score += reward
-    #         agent.store(t.tensor(state, device=device), action, reward, value, logprob, done, step)            
-            
-    #         state = next_state
-    #         if done:
-    #             if episode_score > 6000:
-    #                 agent.save_model(env_name, avg_score)
-    #             score_history.append(episode_score)
-    #             avg_score = np.mean(score_history[-4:])
-    #             # print(f'episode : {ep} score : {episode_score} avg-score : {avg_score} step : {step}')
-    #             episode_score = 0
-    #             state = nomalize(env.reset())
-    #             break
-            
-        
-    #     if step >= rollout_len:
-    #         print(f'\n\n\n Learning Phase at ep {ep} \n\n\n')
-    #         agent.learn()
-    #         mean_eval_returns = evaluate(eval_env, agent, eval_num, deterministic=False)
-    #         print(f'episode : {ep} eval_avg_rets : {mean_eval_returns} step : {step}')
-    #         step = 0
+            agent.save_video(episode_frames, env_name, ep_num=eval_ep)
 
-
-
-    # for ep in range(num_episodes):
-    #     episode_score = 0
-    #     single_roll_out_score = 0
-    #     single_roll_out_steps = 0
-    #     with t.no_grad():
-    #         for step in range(episode_len):
-    #             action, value, logprob = agent.sample_action(state)
-    #             next_state, reward, done, _ = env.step(action.to('cpu').numpy().squeeze())
-    #             episode_score += reward
-    #             single_roll_out_score += reward
-    #             single_roll_out_steps += 1
-    #             agent.store(t.tensor(state, device=device), action, reward, value, logprob, done, step)
-
-    #             state = nomalize(next_state)
-    #             if done:
-    #                 print('its done - single roll out score : ', single_roll_out_score, 'single roll out steps : ', single_roll_out_steps)
-    #                 state = nomalize(env.reset())
-    #                 single_roll_out_steps = 0
-    #                 single_roll_out_score = 0
-
-    #     agent.learn()
-
-    #     score_history.append(episode_score)
-    #     avg_score = np.mean(score_history[-100:])
-    #     print(f'ep-{ep} ; avg_score - {avg_score}\n\n') 
-
-    #     if avg_score > 10000:
-    #         agent.save_model(env_name, avg_score)
-    #         break
+    env.close()
 
 if __name__=='__main__':
-    run()
+    args = parser.parse_args()
+    run(args)
 
-
-
-
-'''
-1. separate actor and critic network with optimizers and lr decay
-2. normalization - states, rewards, advantages
-3. big memory but small batch size
-4. tensors should not broadcast in learn function
-5. actor network with 2 heads - mean and mu
-6. value loss scaling, gradient clipping
-'''
-
-'''
-1. actor net final activation tanh (not making a huge difference, oscillations are there in both the cases)
-2. std dev clip range, std dev init (not initializing std dev gives shit results....it has the utmost impact)
-3. clip std dev, sample, do not sum entropy and logprobs (summing log probs works as well, not clipping the std_dev give high returns immediately)
-4. less entropy coeff (0.01 is inducing more oscillations and the model is unstable compared to 0.001)
-5. clip grad (if not there oscillations are heavy and not stable)
-6. smooth F1 loss for value loss
-7. write a separate evaluate function (avg of 4 runs)
-8. state, reward and advantage normlization (has a very huge effect)
-'''
-
-
-
-
-
-
-
-
-
-
-
-  # gae = 0
-        # for step in reversed(range(len(rewards)-1)):
-        #     delta = rewards[step] + self.gamma * (1 - dones[step]) * values[step + 1] - values[step]
-        #     gae = delta + self.gamma * self.gae_l * (1 - dones[step]) * gae
-        #     self.advantages[step] = gae
-        #     self.returns[step] = self.advantages[step] + values[step]
-
-        # if normalize:
-        #     self.advantages = (self.advantages - self.advantages.mean()) / (self.advantages.std() + 1e-8)
-
-
-        # next_state_gae = 0
-        # for k in reversed(range(rewards.shape[0])):
-        #     if k == rewards.shape[0] - 1:
-        #         next_state_value = 0
-        #     else:
-        #         next_state_value = values[k+1]
-        #     delta = rewards[k] + (1 - dones[k]) * self.gamma * next_state_value - values[k]
-        #     advantage = next_state_gae =  delta + self.gae_l * self.gamma * next_state_gae
-        #     ret = delta + values[k]
-        #     self.advantages[k] = advantage
-        #     self.returns[k] = ret
-
-        # if normalize:
-        #     self.advantages = (self.advantages - t.mean(self.advantages)) / (t.std(self.advantages) + 1e-8)
-
-        # print('here')
-        # for j in range(rewards.shape[0]-1):
-        #     discount = 1
-        #     a_t = 0
-        #     print(j)
-        #     for k in range(j, len(rewards)-1):
-        #         a_t += discount * (rewards[k] + self.gamma * values[k+1] * (1-dones[k])) - values[k]
-        #         discount *= self.gamma * self.gae_l
-        #     self.advantages[j] = a_t
-
-        # returns = self.advantages + values
-        # print('end')

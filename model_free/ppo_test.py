@@ -2,10 +2,16 @@ import os
 import gym
 
 import numpy as np
-import torch 
+import torch as t
 import torch.nn as nn
 import torch.optim as optim
 from torch.distributions.categorical import Categorical
+
+import argparse
+
+parser = argparse.ArgumentParser()
+parser.add_argument('--run_mode', type=str, default='train')
+parser.add_argument('--eval_episodes', type=int, default=1)
 
 class Memory:
     def __init__(self, batch_size):
@@ -49,6 +55,7 @@ def layer_init(layer, std_dev=np.sqrt(2), bias_const=0.0):
     nn.init.orthogonal(layer.weight, std_dev)
     nn.init.constant(layer.bias, bias_const)
     return layer
+
 
 class Network(nn.Module):
     def __init__(self, obs_shape, action_shape):
@@ -96,11 +103,23 @@ class Agent:
         self.epochs = n_epochs
         self.entropy_coeff = entropy_coeff
 
-        self.device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+        self.device = t.device('cuda' if t.cuda.is_available() else 'cpu')
         self.model = Network(np.array(env.observation_space.shape).prod(), env.action_space.n).to(self.device)
         self.optimizer = optim.Adam(self.model.parameters(), lr=self.lr, eps=1e-5)   
 
         self.memory = Memory(self.batch_size)
+
+
+        # save and load models
+        cwd = os.getcwd()
+        self.saved_models_path = os.path.join(cwd, 'saved_model_wts')
+        if os.path.isdir(self.saved_models_path):
+            pass
+        else:
+            print('creating saved models dir to store weights')
+            os.makedirs(self.saved_models_path)
+
+
 
     def remember(self, state, action, reward, value, logprob, done):
         self.memory.store_memory(state,
@@ -111,7 +130,7 @@ class Agent:
                                  done)
         
     def take_action(self, state):
-        state = torch.tensor([state], dtype=torch.float).to(self.device)
+        state = t.tensor([state], dtype=t.float).to(self.device)
         action, logprob, value, entropy = self.model.get_action_value(state)
         return action.to('cpu').numpy()[0], logprob.to('cpu').numpy()[0], value.to('cpu').numpy()[0][0]
 
@@ -143,19 +162,19 @@ class Agent:
 
         for epoch in range(self.epochs): 
             for batch in mb_indices:  
-                mb_states = torch.tensor(b_states[batch], dtype=torch.float).to(self.device)
-                mb_old_logprobs = torch.tensor(b_old_logprobs[batch], dtype=torch.float).to(self.device)
-                mb_actions = torch.tensor(b_actions[batch], dtype=torch.float).to(self.device)
-                mb_advantages = torch.tensor(b_advantages[batch], dtype=torch.float).to(self.device)
-                mb_returns = torch.tensor(b_returns[batch], dtype=torch.float).to(self.device)
+                mb_states = t.tensor(b_states[batch], dtype=t.float).to(self.device)
+                mb_old_logprobs = t.tensor(b_old_logprobs[batch], dtype=t.float).to(self.device)
+                mb_actions = t.tensor(b_actions[batch], dtype=t.float).to(self.device)
+                mb_advantages = t.tensor(b_advantages[batch], dtype=t.float).to(self.device)
+                mb_returns = t.tensor(b_returns[batch], dtype=t.float).to(self.device)
 
                 _, mb_new_logprobs, new_values, entropy = self.model.get_action_value(mb_states, mb_actions)
                 
                 # actor loss
                 ratio = (mb_new_logprobs - mb_old_logprobs).exp()
                 actor_loss1 = mb_advantages * ratio
-                actor_loss2 = mb_advantages * torch.clamp(ratio, 1-self.policy_clip, 1+self.policy_clip)
-                actor_loss = -torch.min(actor_loss1, actor_loss2).mean()
+                actor_loss2 = mb_advantages * t.clamp(ratio, 1-self.policy_clip, 1+self.policy_clip)
+                actor_loss = -t.min(actor_loss1, actor_loss2).mean()
 
                 # critic loss
                 critic_loss = ((mb_returns - new_values)**2).mean()
@@ -173,11 +192,39 @@ class Agent:
         
         self.memory.clear_memory()
 
+    
+    def save_model(self, env_name):
+        model_path = f'{self.saved_models_path}/{env_name}_wts.pt'
+        t.save(self.model.actor.state_dict(), model_path)
+        print('saved model successfully')
 
 
-def run():
-    env = gym.make('CartPole-v1', render_mode='human')
-    num_episodes = num_iterations = 200
+    def load_model(self, env_name):
+        model_path = f'{self.saved_models_path}/{env_name}_wts.pt'
+        if os.path.isfile(model_path):
+            self.model.actor.load_state_dict(t.load(model_path, weights_only=True))
+            print('model loaded successfully')
+        else:
+            print('\n\nWeights does not exists!! Train the model first')
+
+    def deteministic_action(self, state):
+        self.model.actor.eval()
+        state = t.tensor([state], dtype=t.float).to('cuda')
+        probs = self.model.actor.forward(state).squeeze()
+        action = t.argmax(probs)
+        print('this is action : ', action)
+        return action.cpu().detach().numpy()
+    
+    def save_video(self, episode_frames, env_name, ep_num=1):
+        from utils import save_gif
+        save_gif(episode_frames, env_name, ep_num)
+
+
+
+def run(args):
+    env_name = 'CartPole-v1'
+    env = gym.make(env_name, render_mode='rgb_array')
+    num_episodes = num_iterations = 2
     episode_len = steps_per_episode = 256
     
     agent = Agent(env, gamma=0.99, alpha=2.5e-4, gae_l=0.96, policy_clip=0.2, 
@@ -187,31 +234,58 @@ def run():
     score_history = []
     avg_score = 0
 
-    for ep in range(1, num_episodes + 1):
-        episode_score = 0
-        print(f'Simulating episode : {ep}')
-        with torch.no_grad():
-            for step in range(steps_per_episode):
-                
-                action, logprob, value = agent.take_action(state)
-                next_state, reward, done, _ = env.step(action)
+    if args.run_mode == 'train':
 
-                agent.remember(state, action, reward, value, logprob, done)
-                episode_score += reward
+        for ep in range(1, num_episodes + 1):
+            episode_score = 0
+            print(f'Simulating episode : {ep}')
+            with t.no_grad():
+                for step in range(steps_per_episode):
+                    
+                    action, logprob, value = agent.take_action(state)
+                    next_state, reward, done, _ = env.step(action)
+
+                    agent.remember(state, action, reward, value, logprob, done)
+                    episode_score += reward
+                    state = next_state
+
+                    # print(reward)
+                    if done:
+                        state = env.reset()
+
+            agent.learn()
+
+            score_history.append(episode_score)
+            # print(score_history)
+            avg_score = np.mean(score_history[-100:])
+            print(f'ep-{ep} ; avg_score - {avg_score}\n\n')
+
+        agent.save_model(env_name)
+
+    elif args.run_mode == 'eval':
+        eval_episodes = args.eval_episodes
+        agent.load_model(env_name)
+
+        for eval_ep in range(eval_episodes):
+            state = env.reset()
+            done = False
+            score = 0
+            episode_frames = []
+            while not done:
+                frame = env.render()
+                frame = np.array(frame).squeeze()
+                episode_frames.append(frame)
+
+                action = agent.deteministic_action(state)
+                next_state, reward, done, info = env.step(action)
+                score += reward
                 state = next_state
 
-                # print(reward)
-                if done:
-                    print('done')
-                    state = env.reset()
+            print(f'eval ep: {eval_ep}, score: {score}')
 
-        agent.learn()
-
-        score_history.append(episode_score)
-        # print(score_history)
-        avg_score = np.mean(score_history[-100:])
-        print(f'ep-{ep} ; avg_score - {avg_score}\n\n')
+            agent.save_video(episode_frames, env_name, ep_num=eval_ep)
 
 
 if __name__=='__main__':
-    run()
+    args = parser.parse_args()
+    run(args)

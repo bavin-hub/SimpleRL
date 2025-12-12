@@ -8,6 +8,14 @@ import random
 from torch.distributions.normal import Normal
 import itertools
 import torch.nn.functional as F
+import time
+
+import argparse
+
+parser = argparse.ArgumentParser()
+parser.add_argument('--run_mode', type=str, default='train')
+parser.add_argument('--eval_episodes', type=int, default=1)
+
 
 
 class OUActionNoise():
@@ -218,6 +226,15 @@ class Agent():
 
         self.update_parameters(tau=1)
 
+        # save and load models
+        cwd = os.getcwd()
+        self.saved_models_path = os.path.join(cwd, 'saved_model_wts')
+        if os.path.isdir(self.saved_models_path):
+            pass
+        else:
+            print('creating saved models dir to store weights')
+            os.makedirs(self.saved_models_path)
+
 
     def update_parameters(self, tau=None):
         if tau == None:
@@ -273,12 +290,6 @@ class Agent():
         critic_values_ = self.target_critic.forward(next_states, target_actions)
         critic_values = self.critic.forward(states, actions)
 
-        # print(states.shape)
-        # print(actions.shape)
-        # print(rewards.shape)
-        # print(next_states.shape)
-        # print(dones.shape)
-
         # print(dones)
         critic_values_[dones] = 0.0
         critic_values_ = critic_values_.view(-1)
@@ -300,47 +311,100 @@ class Agent():
         self.update_parameters()
 
 
-    def save_model(self):
-        path = f'/home/bavin/sem1/intro_robot_learning/my_rl/models/mine_ddpg.pt'
-        t.save(self.actor.state_dict(), path)
+    def save_model(self, env_name):
+        model_path = f'{self.saved_models_path}/{env_name}_wts.pt'
+        t.save(self.actor.state_dict(), model_path)
         print('saved model successfully')
 
 
+    def load_model(self, env_name):
+        model_path = f'{self.saved_models_path}/{env_name}_wts.pt'
+        if os.path.isfile(model_path):
+            self.actor.load_state_dict(t.load(model_path, weights_only=True))
+            print('model loaded successfully')
+        else:
+            print('\n\nWeights does not exists!! Train the model first')
+
+    def deteministic_action(self, state):
+        self.actor.eval()
+        state = t.tensor([state], dtype=t.float).to('cuda')
+        action = self.actor.forward(state)
+        return action.cpu().detach().numpy()[0] 
+    
+    def save_video(self, episode_frames, env_name, ep_num=1):
+        from utils import save_gif
+        save_gif(episode_frames, env_name, ep_num)
 
 
-def run_agent():
-    env = gym.make('LunarLanderContinuous-v2')
+
+
+def run_agent(args):
+    env_name = 'LunarLanderContinuous-v2'
+    env = gym.make(env_name, render_mode='rgb_array')
 
     agent = Agent(env, alpha=0.0001, beta=0.001, tau=0.001)
 
-    n_games = 1000
-    best_score = env.reward_range[0]
+    n_games = 2
     score_history = []
 
-    for i in range(n_games):
-        state = env.reset()
-        done = False
-        score = 0
-        agent.noise.reset()
-        while not done:
-            action = agent.choose_action(state)
-            next_state, reward, done, info = env.step(action)
-            agent.remember(t.tensor(state), t.tensor(action), reward, t.tensor(next_state), done)
-            agent.learn()
-            score += reward
-            state = next_state
-        score_history.append(score)
-        avg_score = np.mean(score_history[-20:])
-    
+    frames = []
 
-        print('episode ', i, ' score : ', score, ' avg score : ', avg_score)
+    if args.run_mode == 'train':
 
-    agent.save_model()
+        for i in range(n_games):
+            state = env.reset()
+            done = False
+            score = 0
+            agent.noise.reset()
+            while not done:
+                frame = env.render()
+                frame = np.array(frame).squeeze()
+                # print(frame.shape)
+                frames.append(frame)
 
+                action = agent.choose_action(state)
+                next_state, reward, done, info = env.step(action)
+                agent.remember(t.tensor(state), t.tensor(action), reward, t.tensor(next_state), done)
+                agent.learn()
+                score += reward
+                state = next_state
+            score_history.append(score)
+            avg_score = np.mean(score_history[-20:])
+        
+            print('episode ', i, ' score : ', score, ' avg score : ', avg_score)
+
+        agent.save_model(env_name)
+
+    elif args.run_mode == 'eval':
+        eval_episodes = args.eval_episodes
+        agent.load_model(env_name)
+
+        for eval_ep in range(eval_episodes):
+            state = env.reset()
+            done = False
+            score = 0
+            episode_frames = []
+            while not done:
+                frame = env.render()
+                frame = np.array(frame).squeeze()
+                episode_frames.append(frame)
+
+                action = agent.deteministic_action(state)
+                next_state, reward, done, info = env.step(action)
+                score += reward
+                state = next_state
+
+            print(f'eval ep: {eval_ep}, score: {score}')
+
+            agent.save_video(episode_frames, env_name, ep_num=eval_ep)
+
+
+    env.close()
     
 
 if __name__=='__main__':
-    run_agent()
+    args = parser.parse_args()
+    run_agent(args)
 
 
 
