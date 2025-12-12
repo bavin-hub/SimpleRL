@@ -4,7 +4,7 @@ This repository contains implementations of several Reinforcement Learning (RL) 
 
 ---
 
-![test gif](results/test.gif)
+![test gif](results/test.gif)  ![BipedalWalker-v3_eval_ep-1 gif](results/BipedalWalker-v3_eval_ep-1.gif)
 
 
 ## Features
